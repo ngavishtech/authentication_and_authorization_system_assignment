@@ -15,7 +15,8 @@ No UI, no HTTP layer — pure business logic with a comprehensive test suite.
 6. [Public API](#public-api)
 7. [Running Tests](#running-tests)
 8. [Test Reports](#test-reports)
-9. [Design Decisions](#design-decisions)
+9. [Test Coverage & State](#test-coverage--state)
+10. [Design Decisions](#design-decisions)
 
 ---
 
@@ -137,6 +138,65 @@ Email values are stored as-is (lowercased for uniqueness). The system does not v
 The spec says tokens expire "after 30 minutes of **inactivity**." This was interpreted as a **sliding window**: each successful `checkPermission` call resets the 30-minute clock. A token only expires if no activity occurs for a full 30 minutes.
 
 > **Alternative interpretation:** fixed expiry from login time (simpler, but contradicts the word "inactivity").
+
+---
+
+### A7 — Logout with an already-invalidated token throws an error
+
+**Current behaviour:** calling `logout(token)` with a token that is no longer active (already logged out, invalidated by a new login, or expired) throws `InvalidTokenError`.
+
+**Alternative:** treat logout as idempotent — silently succeed if the session does not exist, on the grounds that the desired end state (user is logged out) is already satisfied.
+
+Both are valid choices. The current behaviour was chosen because it gives callers explicit feedback when they hold a stale token, which can surface bugs in client code earlier. The downside is that callers must guard against double-logout scenarios.
+
+> **Open question:** Should logout be idempotent (no error on an already-invalid token), or should it strictly signal that the token was not found?
+
+---
+
+### A8 — `checkPermission` returns a plain boolean; denial reasons are not exposed
+
+`checkPermission(token, action)` has two distinct failure paths:
+
+1. **Invalid or expired token** → throws `InvalidTokenError`
+2. **Insufficient role for the action** → returns `false`
+
+The return type for path 2 is a plain `boolean`. The caller learns that access is denied but not *why* (e.g., which specific role restriction applies). In the current single-role model this is unambiguous, but a richer model might want to distinguish between "your role never allows this" and "this resource requires a higher role."
+
+> **Open questions:**
+> - Should `checkPermission` throw a typed `PermissionDeniedError` instead of returning `false`, so callers always use exceptions for failure and never need to check a return value?
+> - Should the return value carry a reason payload (e.g., `{ permitted: false, reason: 'insufficient_role' }`) for audit logging or richer error messages?
+
+---
+
+### A9 — Single-threaded, in-memory implementation
+
+The current implementation carries two related constraints:
+
+**Single-threaded:** Node.js runs on a single-threaded event loop. All store reads and writes are synchronous and atomic within a single request. There are no race conditions to guard against (e.g., two simultaneous logins cannot both read `failedLoginAttempts` and increment it independently).
+
+**In-memory store:** all state lives in plain JavaScript `Map` objects inside the running process. This means:
+- State is lost on process restart.
+- The system cannot be scaled horizontally (multiple instances would not share state).
+- No persistence, no transactions, no external DB dependency.
+
+These constraints are intentional for this assignment — they keep the focus on logic and test quality. A production system would replace the in-memory store with a database (e.g., PostgreSQL, Redis for sessions) and would need concurrency-safe operations (optimistic locking, atomic counters, or database transactions) for things like the failed-login counter.
+
+---
+
+### A10 — Test plan coverage should be revisited after resolving open questions
+
+The current 53 tests cover the implemented behaviour based on the assumptions documented above. Several open questions, once answered, will require additional test scenarios. This assumption is a reminder that the test suite is **not yet complete**.
+
+Areas that will need new or updated tests when resolved:
+
+| Area | Pending decision | Tests needed |
+|---|---|---|
+| `manage_users` edit / delete | A1, A2 | Full CRUD matrix per role, self-edit edge cases, uniqueness on edit, session invalidation on update/delete |
+| Admin self-demotion / self-delete | A2 | Attempt to demote the last admin; attempt to delete own account |
+| Account unlock | A3 | Auto-unlock after cooldown; admin-initiated unlock; lockout counter reset |
+| Logout idempotency | A7 | Double-logout behaviour (throw vs. silent success) |
+| `checkPermission` denial reason | A8 | Assertion on error type / payload shape if changed from `boolean` |
+| `register()` access control | A1 | If gated: unauthenticated register fails; admin-token register succeeds |
 
 ---
 
@@ -262,6 +322,42 @@ Every `npm test` run automatically generates an HTML report alongside the consol
 | **Coverage** | `reports/coverage/index.html`   | `npm run test:coverage` | Line-by-line coverage map                                                   |
 
 > `reports/` is git-ignored; all reports are freshly generated on each run.
+
+---
+
+## Test Coverage & State
+
+**53 tests — all passing** as of the current implementation.
+
+### Distribution by suite
+
+| Suite | Tests | What it covers |
+|---|---|---|
+| `user-management.test.ts` | 10 | Registration success (all 3 roles), duplicate username, duplicate email, case-insensitive email uniqueness, invalid role, bcrypt hash verification, unique user IDs |
+| `authentication.test.ts` | 13 | Login success, case-insensitive email on login, wrong password, unknown email, error message parity (no email enumeration), failed-attempt counter, account lock at attempt 5, locked account rejects correct password, sliding 30-min expiry, token still valid at 29 min, activity resets expiry window |
+| `authorization.test.ts` | 16 | Full 3 × 4 role-action matrix (12 parametrized cases), unknown token, expired token, logged-out token, token invalidated by re-login |
+| `session-management.test.ts` | 8 | Logout invalidates token, double-logout throws, logout does not affect other users, re-login returns new token, new token is valid, old token invalid after re-login, only one session per user in store, concurrent sessions across users are independent |
+| `integration.test.ts` | 6 | Happy path (register → login → use → logout → verify invalid), lockout flow, session expiry flow, role isolation (`manage_users`), multi-user lockout isolation, re-login after expiry |
+| **Total** | **53** | |
+
+### What is covered
+
+- Every cell of the role × action permission matrix
+- All 6 domain error classes triggered by at least one test
+- Time-dependent behaviour (expiry, sliding window) via deterministic `Date.now` mocking
+- Password stored as bcrypt hash (format assertion + indirect login verification)
+- Session store state validated directly via `_store` in key tests
+
+### What is not yet tested
+
+The following areas are pending implementation or assumption resolution (see [A10](#a10--test-plan-coverage-should-be-revisited-after-resolving-open-questions)):
+
+- `manage_users` edit and delete operations (not yet implemented)
+- Admin self-edit / self-delete edge cases
+- Account unlock mechanism (not yet implemented)
+- Logout idempotency behaviour (see A7)
+- `checkPermission` denial reason shape (see A8)
+- `register()` access control if gated behind a token (see A1)
 
 ---
 
