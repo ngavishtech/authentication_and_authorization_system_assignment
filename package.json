@@ -1,0 +1,28 @@
+{
+  "name": "authentication-authorization-system",
+  "version": "1.0.0",
+  "description": "Authentication and Authorization System – QA Automation Assignment",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "test:coverage": "jest --coverage --coverageDirectory=reports/coverage",
+    "test:report": "jest --json --outputFile=reports/results.json",
+    "test:all": "jest --coverage --coverageDirectory=reports/coverage --json --outputFile=reports/results.json"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.0",
+    "@types/uuid": "^9.0.8",
+    "jest": "^29.7.0",
+    "jest-html-reporters": "^3.1.7",
+    "ts-jest": "^29.1.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
+  }
+}

@@ -143,3 +143,6 @@ vite.config.ts.timestamp-*
 .vite/
 
 .idea/*
+
+# Test reports (generated, not source)
+reports/
